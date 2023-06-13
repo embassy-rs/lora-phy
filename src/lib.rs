@@ -149,8 +149,8 @@ where
         self.radio_kind.reset(delay).await?;
         self.radio_kind.ensure_ready(self.radio_mode).await?;
         self.radio_kind.init_rf_switch().await?;
-        self.radio_kind.set_standby().await?;
-        self.radio_mode = RadioMode::Standby;
+        self.radio_kind.set_sleep(delay).await?;
+        self.radio_mode = RadioMode::Sleep;
         self.rx_continuous = false;
         self.radio_kind.set_lora_modem(enable_public_network).await?;
         self.radio_kind.set_oscillator().await?;
