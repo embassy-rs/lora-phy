@@ -164,6 +164,7 @@ where
 
     /// The sx127x LoRa mode is set when setting a mode while in sleep mode.
     async fn set_lora_modem(&mut self, enable_public_network: bool) -> Result<(), RadioError> {
+        self.ensure_ready(RadioMode::Sleep).await?;
         if enable_public_network {
             self.write_register(Register::RegSyncWord, LORA_MAC_PUBLIC_SYNCWORD, false)
                 .await
