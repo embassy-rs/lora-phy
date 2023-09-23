@@ -50,22 +50,46 @@ where
 
     // Utility functions
 
-    async fn add_register_to_retention_list(&mut self, register: Register) -> Result<(), RadioError> {
-        let mut buffer = [0x00u8; (1 + (2 * MAX_NUMBER_REGS_IN_RETENTION)) as usize];
-
-        // Read the address and registers already added to the list
+    async fn read_register<const N: usize>(&mut self, register: Register) -> Result<[u8; N], RadioError> {
+        let mut buf = [0u8; N];
         self.intf
             .read(
-                &[&[
-                    OpCode::ReadRegister.value(),
-                    Register::RetentionList.addr1(),
-                    Register::RetentionList.addr2(),
-                    0x00u8,
-                ]],
-                &mut buffer,
+                &[&[OpCode::ReadRegister.value(), register.addr1(), register.addr2(), 0x00u8]],
+                &mut buf,
                 None,
             )
             .await?;
+        Ok(buf)
+    }
+
+    async fn read_u8_register(&mut self, register: Register) -> Result<u8, RadioError> {
+        Ok(self.read_register::<1>(register).await?[0])
+    }
+
+    async fn read_u32_register(&mut self, register: Register) -> Result<u32, RadioError> {
+        self.read_register::<4>(register).await.map(u32::from_be_bytes)
+    }
+
+    async fn write_u8_register(&mut self, register: Register, value: u8) -> Result<(), RadioError> {
+        let register_and_value = [OpCode::WriteRegister.value(), register.addr1(), register.addr2(), value];
+        self.intf.write(&[&register_and_value], false).await
+    }
+
+    async fn write_u16_register(&mut self, register: Register, value: u16) -> Result<(), RadioError> {
+        let be = value.to_be_bytes();
+        let register_and_value = [
+            OpCode::WriteRegister.value(),
+            register.addr1(),
+            register.addr2(),
+            be[0],
+            be[1],
+        ];
+        self.intf.write(&[&register_and_value], false).await
+    }
+
+    async fn add_register_to_retention_list(&mut self, register: Register) -> Result<(), RadioError> {
+        let mut buffer: [u8; (1 + (2 * MAX_NUMBER_REGS_IN_RETENTION)) as usize] =
+            self.read_register(Register::RetentionList).await?;
 
         let number_of_registers = buffer[0];
         for i in 0..number_of_registers {
@@ -108,13 +132,7 @@ where
 
         if symbol_num != 0 {
             reg = exp + (mant << 3);
-            let register_and_timeout = [
-                OpCode::WriteRegister.value(),
-                Register::SynchTimeout.addr1(),
-                Register::SynchTimeout.addr2(),
-                reg,
-            ];
-            self.intf.write(&[&register_and_timeout], false).await?;
+            self.write_u8_register(Register::SynchTimeout, reg).await?;
         }
 
         Ok(())
@@ -265,27 +283,12 @@ where
     async fn set_lora_modem(&mut self, enable_public_network: bool) -> Result<(), RadioError> {
         let op_code_and_packet_type = [OpCode::SetPacketType.value(), PacketType::LoRa.value()];
         self.intf.write(&[&op_code_and_packet_type], false).await?;
-        if enable_public_network {
-            let register_and_syncword = [
-                OpCode::WriteRegister.value(),
-                Register::LoRaSyncword.addr1(),
-                Register::LoRaSyncword.addr2(),
-                ((LORA_MAC_PUBLIC_SYNCWORD >> 8) & 0xFF) as u8,
-                (LORA_MAC_PUBLIC_SYNCWORD & 0xFF) as u8,
-            ];
-            self.intf.write(&[&register_and_syncword], false).await?;
+        let sync_word = if enable_public_network {
+            LORA_MAC_PUBLIC_SYNCWORD
         } else {
-            let register_and_syncword = [
-                OpCode::WriteRegister.value(),
-                Register::LoRaSyncword.addr1(),
-                Register::LoRaSyncword.addr2(),
-                ((LORA_MAC_PRIVATE_SYNCWORD >> 8) & 0xFF) as u8,
-                (LORA_MAC_PRIVATE_SYNCWORD & 0xFF) as u8,
-            ];
-            self.intf.write(&[&register_and_syncword], false).await?;
-        }
-
-        Ok(())
+            LORA_MAC_PRIVATE_SYNCWORD
+        };
+        self.write_u16_register(Register::LoRaSyncword, sync_word).await
     }
 
     async fn set_oscillator(&mut self) -> Result<(), RadioError> {
@@ -391,27 +394,9 @@ where
                 return Err(RadioError::InvalidOutputPower);
             }
             // Provide better resistance of the SX1262 Tx to antenna mismatch (see DS_SX1261-2_V1.2 datasheet chapter 15.2)
-            let mut tx_clamp_cfg = [0x00u8];
-            self.intf
-                .read(
-                    &[&[
-                        OpCode::ReadRegister.value(),
-                        Register::TxClampCfg.addr1(),
-                        Register::TxClampCfg.addr2(),
-                        0x00u8,
-                    ]],
-                    &mut tx_clamp_cfg,
-                    None,
-                )
+            let tx_clamp_cfg = self.read_u8_register(Register::TxClampCfg).await?;
+            self.write_u8_register(Register::TxClampCfg, tx_clamp_cfg | 0x0F << 1)
                 .await?;
-            tx_clamp_cfg[0] |= 0x0F << 1;
-            let register_and_tx_clamp_cfg = [
-                OpCode::WriteRegister.value(),
-                Register::TxClampCfg.addr1(),
-                Register::TxClampCfg.addr2(),
-                tx_clamp_cfg[0],
-            ];
-            self.intf.write(&[&register_and_tx_clamp_cfg], false).await?;
 
             match output_power {
                 22 => {
@@ -466,36 +451,13 @@ where
         self.intf.write(&[&op_code_and_mod_params], false).await?;
 
         // Handle modulation quality with the 500 kHz LoRa bandwidth (see DS_SX1261-2_V1.2 datasheet chapter 15.1)
-        let mut tx_mod = [0x00u8];
-        self.intf
-            .read(
-                &[&[
-                    OpCode::ReadRegister.value(),
-                    Register::TxModulation.addr1(),
-                    Register::TxModulation.addr2(),
-                    0x00u8,
-                ]],
-                &mut tx_mod,
-                None,
-            )
-            .await?;
-        if mdltn_params.bandwidth == Bandwidth::_500KHz {
-            let register_and_tx_mod_update = [
-                OpCode::WriteRegister.value(),
-                Register::TxModulation.addr1(),
-                Register::TxModulation.addr2(),
-                tx_mod[0] & (!(1 << 2)),
-            ];
-            self.intf.write(&[&register_and_tx_mod_update], false).await
+        let tx_mod = self.read_u8_register(Register::TxModulation).await?;
+        let tx_mod = if mdltn_params.bandwidth == Bandwidth::_500KHz {
+            tx_mod & (!(1 << 2))
         } else {
-            let register_and_tx_mod_update = [
-                OpCode::WriteRegister.value(),
-                Register::TxModulation.addr1(),
-                Register::TxModulation.addr2(),
-                tx_mod[0] | (1 << 2),
-            ];
-            self.intf.write(&[&register_and_tx_mod_update], false).await
-        }
+            tx_mod | (1 << 2)
+        };
+        self.write_u8_register(Register::TxModulation, tx_mod).await
     }
 
     async fn set_packet_params(&mut self, pkt_params: &PacketParams) -> Result<(), RadioError> {
@@ -606,44 +568,15 @@ where
         self.set_lora_symbol_num_timeout(symbol_timeout_final).await?;
 
         // Optimize the Inverted IQ Operation (see DS_SX1261-2_V1.2 datasheet chapter 15.4)
-        let mut iq_polarity = [0x00u8];
-        self.intf
-            .read(
-                &[&[
-                    OpCode::ReadRegister.value(),
-                    Register::IQPolarity.addr1(),
-                    Register::IQPolarity.addr2(),
-                    0x00u8,
-                ]],
-                &mut iq_polarity,
-                None,
-            )
-            .await?;
-        if rx_pkt_params.iq_inverted {
-            let register_and_iq_polarity = [
-                OpCode::WriteRegister.value(),
-                Register::IQPolarity.addr1(),
-                Register::IQPolarity.addr2(),
-                iq_polarity[0] & (!(1 << 2)),
-            ];
-            self.intf.write(&[&register_and_iq_polarity], false).await?;
+        let iq_polarity = self.read_u8_register(Register::IQPolarity).await?;
+        let iq_polarity = if rx_pkt_params.iq_inverted {
+            iq_polarity & (!(1 << 2))
         } else {
-            let register_and_iq_polarity = [
-                OpCode::WriteRegister.value(),
-                Register::IQPolarity.addr1(),
-                Register::IQPolarity.addr2(),
-                iq_polarity[0] | (1 << 2),
-            ];
-            self.intf.write(&[&register_and_iq_polarity], false).await?;
-        }
+            iq_polarity | (1 << 2)
+        };
+        self.write_u8_register(Register::IQPolarity, iq_polarity).await?;
 
-        let register_and_rx_gain = [
-            OpCode::WriteRegister.value(),
-            Register::RxGain.addr1(),
-            Register::RxGain.addr2(),
-            rx_gain_final,
-        ];
-        self.intf.write(&[&register_and_rx_gain], false).await?;
+        self.write_u8_register(Register::RxGain, rx_gain_final).await?;
 
         match duty_cycle_params {
             Some(&duty_cycle) => {
@@ -682,25 +615,13 @@ where
             return Err(RadioError::OpError(read_status));
         }
 
-        let mut payload_length_buffer = [0x00u8];
-        if rx_pkt_params.implicit_header {
-            self.intf
-                .read(
-                    &[&[
-                        OpCode::ReadRegister.value(),
-                        Register::PayloadLength.addr1(),
-                        Register::PayloadLength.addr2(),
-                        0x00u8,
-                    ]],
-                    &mut payload_length_buffer,
-                    None,
-                )
-                .await?;
+        let payload_length_buffer = if rx_pkt_params.implicit_header {
+            self.read_u8_register(Register::PayloadLength).await?
         } else {
-            payload_length_buffer[0] = rx_buffer_status[0];
-        }
+            rx_buffer_status[0]
+        };
 
-        let payload_length = payload_length_buffer[0];
+        let payload_length = payload_length_buffer;
         let offset = rx_buffer_status[1];
 
         if (payload_length as usize) > receiving_buffer.len() {
@@ -748,13 +669,7 @@ where
             rx_gain_final = 0x96u8;
         }
 
-        let register_and_rx_gain = [
-            OpCode::WriteRegister.value(),
-            Register::RxGain.addr1(),
-            Register::RxGain.addr2(),
-            rx_gain_final,
-        ];
-        self.intf.write(&[&register_and_rx_gain], false).await?;
+        self.write_u8_register(Register::RxGain, rx_gain_final).await?;
 
         // See:
         //  https://lora-developers.semtech.com/documentation/tech-papers-and-guides/channel-activity-detection-ensuring-your-lora-packets-are-sent/how-to-ensure-your-lora-packets-are-sent-properly
@@ -897,35 +812,9 @@ where
                     debug!("RxDone in radio mode {}", radio_mode);
                     if !rx_continuous {
                         // implicit header mode timeout behavior (see DS_SX1261-2_V1.2 datasheet chapter 15.3)
-                        let register_and_clear = [
-                            OpCode::WriteRegister.value(),
-                            Register::RTCCtrl.addr1(),
-                            Register::RTCCtrl.addr2(),
-                            0x00u8,
-                        ];
-                        self.intf.write(&[&register_and_clear], false).await?;
-
-                        let mut evt_clr = [0x00u8];
-                        self.intf
-                            .read(
-                                &[&[
-                                    OpCode::ReadRegister.value(),
-                                    Register::EvtClr.addr1(),
-                                    Register::EvtClr.addr2(),
-                                    0x00u8,
-                                ]],
-                                &mut evt_clr,
-                                None,
-                            )
-                            .await?;
-                        evt_clr[0] |= 1 << 1;
-                        let register_and_evt_clear = [
-                            OpCode::WriteRegister.value(),
-                            Register::EvtClr.addr1(),
-                            Register::EvtClr.addr2(),
-                            evt_clr[0],
-                        ];
-                        self.intf.write(&[&register_and_evt_clear], false).await?;
+                        self.write_u8_register(Register::RTCCtrl, 0).await?;
+                        let evt_clr = self.read_u8_register(Register::EvtClr).await?;
+                        self.write_u8_register(Register::EvtClr, evt_clr | (1 << 1)).await?;
                     }
                     return Ok(());
                 }
@@ -964,89 +853,24 @@ where
         }
         self.set_irq_params(None).await?;
 
-        let mut reg_ana_lna_buffer_original = [0x00u8];
-        let mut reg_ana_mixer_buffer_original = [0x00u8];
-        let mut reg_ana_lna_buffer = [0x00u8];
-        let mut reg_ana_mixer_buffer = [0x00u8];
-        let mut number_buffer = [0x00u8; 4];
-        self.intf
-            .read(
-                &[&[
-                    OpCode::ReadRegister.value(),
-                    Register::AnaLNA.addr1(),
-                    Register::AnaLNA.addr2(),
-                    0x00u8,
-                ]],
-                &mut reg_ana_lna_buffer_original,
-                None,
-            )
-            .await?;
-        reg_ana_lna_buffer[0] = reg_ana_lna_buffer_original[0] & (!(1 << 0));
-        let mut register_and_ana_lna = [
-            OpCode::WriteRegister.value(),
-            Register::AnaLNA.addr1(),
-            Register::AnaLNA.addr2(),
-            reg_ana_lna_buffer[0],
-        ];
-        self.intf.write(&[&register_and_ana_lna], false).await?;
+        let lna = self.read_u8_register(Register::AnaLNA).await?;
+        self.write_u8_register(Register::AnaLNA, lna & (!(1 << 0))).await?;
 
-        self.intf
-            .read(
-                &[&[
-                    OpCode::ReadRegister.value(),
-                    Register::AnaMixer.addr1(),
-                    Register::AnaMixer.addr2(),
-                    0x00u8,
-                ]],
-                &mut reg_ana_mixer_buffer_original,
-                None,
-            )
-            .await?;
-        reg_ana_mixer_buffer[0] = reg_ana_mixer_buffer_original[0] & (!(1 << 7));
-        let mut register_and_ana_mixer = [
-            OpCode::WriteRegister.value(),
-            Register::AnaMixer.addr1(),
-            Register::AnaMixer.addr2(),
-            reg_ana_mixer_buffer[0],
-        ];
-        self.intf.write(&[&register_and_ana_mixer], false).await?;
+        let mixer = self.read_u8_register(Register::AnaMixer).await?;
+        self.write_u8_register(Register::AnaMixer, mixer & (!(1 << 7))).await?;
 
         // Set radio in continuous reception mode.
         let op_code_and_timeout = [OpCode::SetRx.value(), 0xffu8, 0xffu8, 0xffu8];
         self.intf.write(&[&op_code_and_timeout], false).await?;
 
-        self.intf
-            .read(
-                &[&[
-                    OpCode::ReadRegister.value(),
-                    Register::GeneratedRandomNumber.addr1(),
-                    Register::GeneratedRandomNumber.addr2(),
-                    0x00u8,
-                ]],
-                &mut number_buffer,
-                None,
-            )
-            .await?;
+        let number_buffer = self.read_u32_register(Register::GeneratedRandomNumber).await?;
 
         self.set_standby().await?;
 
-        register_and_ana_lna = [
-            OpCode::WriteRegister.value(),
-            Register::AnaLNA.addr1(),
-            Register::AnaLNA.addr2(),
-            reg_ana_lna_buffer_original[0],
-        ];
-        self.intf.write(&[&register_and_ana_lna], false).await?;
+        self.write_u8_register(Register::AnaLNA, lna).await?;
+        self.write_u8_register(Register::AnaMixer, mixer).await?;
 
-        register_and_ana_mixer = [
-            OpCode::WriteRegister.value(),
-            Register::AnaMixer.addr1(),
-            Register::AnaMixer.addr2(),
-            reg_ana_mixer_buffer_original[0],
-        ];
-        self.intf.write(&[&register_and_ana_mixer], false).await?;
-
-        Ok(u32::from_be_bytes(number_buffer))
+        Ok(number_buffer)
     }
 }
 
