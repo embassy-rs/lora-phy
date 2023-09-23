@@ -149,14 +149,10 @@ where
         self.intf.write(&[&op_code_and_pa_config], false).await
     }
 
-    fn timeout_1(timeout: u32) -> u8 {
-        ((timeout >> 16) & 0xFF) as u8
-    }
-    fn timeout_2(timeout: u32) -> u8 {
-        ((timeout >> 8) & 0xFF) as u8
-    }
-    fn timeout_3(timeout: u32) -> u8 {
-        (timeout & 0xFF) as u8
+    /// Convert a u32 with MSB ignored to a byte array in big-endian byte order.
+    fn u24_to_be_bytes(v: u32) -> [u8; 3] {
+        let be = v.to_be_bytes();
+        [be[1], be[2], be[3]]
     }
 
     fn convert_freq_in_hz_to_pll_step(freq_in_hz: u32) -> u32 {
@@ -307,13 +303,13 @@ where
             | BoardType::Stm32wlSx1262 => TcxoCtrlVoltage::Ctrl1V7,
             BoardType::HeltecWifiLoraV31262 => TcxoCtrlVoltage::Ctrl1V8,
         };
-        let timeout = BRD_TCXO_WAKEUP_TIME << 6; // duration allowed for TCXO to reach 32MHz
+        let timeout_be = Self::u24_to_be_bytes(BRD_TCXO_WAKEUP_TIME << 6); // duration allowed for TCXO to reach 32MHz
         let op_code_and_tcxo_control = [
             OpCode::SetTCXOMode.value(),
             voltage.value() & 0x07,
-            Self::timeout_1(timeout),
-            Self::timeout_2(timeout),
-            Self::timeout_3(timeout),
+            timeout_be[0],
+            timeout_be[1],
+            timeout_be[2],
         ];
         self.intf.write(&[&op_code_and_tcxo_control], false).await
     }
@@ -519,12 +515,8 @@ where
     async fn do_tx(&mut self, timeout_in_ms: u32) -> Result<(), RadioError> {
         self.intf.iv.enable_rf_switch_tx().await?;
 
-        let op_code_and_timeout = [
-            OpCode::SetTx.value(),
-            Self::timeout_1(timeout_in_ms),
-            Self::timeout_2(timeout_in_ms),
-            Self::timeout_3(timeout_in_ms),
-        ];
+        let timeout_be = Self::u24_to_be_bytes(timeout_in_ms);
+        let op_code_and_timeout = [OpCode::SetTx.value(), timeout_be[0], timeout_be[1], timeout_be[2]];
         self.intf.write(&[&op_code_and_timeout], false).await
     }
 
@@ -580,24 +572,22 @@ where
 
         match duty_cycle_params {
             Some(&duty_cycle) => {
+                let rx_time_be = Self::u24_to_be_bytes(duty_cycle.rx_time);
+                let sleep_time_be = Self::u24_to_be_bytes(duty_cycle.sleep_time);
                 let op_code_and_duty_cycle = [
                     OpCode::SetRxDutyCycle.value(),
-                    Self::timeout_1(duty_cycle.rx_time),
-                    Self::timeout_2(duty_cycle.rx_time),
-                    Self::timeout_3(duty_cycle.rx_time),
-                    Self::timeout_1(duty_cycle.sleep_time),
-                    Self::timeout_2(duty_cycle.sleep_time),
-                    Self::timeout_3(duty_cycle.sleep_time),
+                    rx_time_be[0],
+                    rx_time_be[1],
+                    rx_time_be[2],
+                    sleep_time_be[0],
+                    sleep_time_be[1],
+                    sleep_time_be[2],
                 ];
                 self.intf.write(&[&op_code_and_duty_cycle], false).await
             }
             None => {
-                let op_code_and_timeout = [
-                    OpCode::SetRx.value(),
-                    Self::timeout_1(timeout_in_ms_final),
-                    Self::timeout_2(timeout_in_ms_final),
-                    Self::timeout_3(timeout_in_ms_final),
-                ];
+                let timeout_be = Self::u24_to_be_bytes(timeout_in_ms_final);
+                let op_code_and_timeout = [OpCode::SetRx.value(), timeout_be[0], timeout_be[1], timeout_be[2]];
                 self.intf.write(&[&op_code_and_timeout], false).await
             }
         }
