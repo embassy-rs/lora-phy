@@ -50,7 +50,7 @@ where
     async fn read_register(&mut self, register: Register) -> Result<u8, RadioError> {
         let write_buffer = [register.read_addr()];
         let mut read_buffer = [0x00u8];
-        self.intf.read(&[&write_buffer], &mut read_buffer, None).await?;
+        self.intf.read(&[&write_buffer], &mut read_buffer).await?;
         Ok(read_buffer[0])
     }
 

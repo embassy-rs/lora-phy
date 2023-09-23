@@ -56,7 +56,6 @@ where
             .read(
                 &[&[OpCode::ReadRegister.value(), register.addr1(), register.addr2(), 0x00u8]],
                 &mut buf,
-                None,
             )
             .await?;
         Ok(buf)
@@ -599,20 +598,20 @@ where
         receiving_buffer: &mut [u8],
     ) -> Result<u8, RadioError> {
         let op_code = [OpCode::GetRxBufferStatus.value()];
-        let mut rx_buffer_status = [0x00u8; 2];
-        let read_status = self.intf.read_with_status(&[&op_code], &mut rx_buffer_status).await?;
-        if OpStatusErrorMask::is_error(read_status) {
-            return Err(RadioError::OpError(read_status));
+        let mut rx_buffer_status = [0x00u8; 3];
+        self.intf.read(&[&op_code], &mut rx_buffer_status).await?;
+        if OpStatusErrorMask::is_error(rx_buffer_status[0]) {
+            return Err(RadioError::OpError(rx_buffer_status[0]));
         }
 
         let payload_length_buffer = if rx_pkt_params.implicit_header {
             self.read_u8_register(Register::PayloadLength).await?
         } else {
-            rx_buffer_status[0]
+            rx_buffer_status[1]
         };
 
         let payload_length = payload_length_buffer;
-        let offset = rx_buffer_status[1];
+        let offset = rx_buffer_status[2];
 
         if (payload_length as usize) > receiving_buffer.len() {
             Err(RadioError::PayloadSizeMismatch(
@@ -623,8 +622,7 @@ where
             self.intf
                 .read(
                     &[&[OpCode::ReadBuffer.value(), offset, 0x00u8]],
-                    receiving_buffer,
-                    Some(payload_length),
+                    &mut receiving_buffer[..payload_length as usize],
                 )
                 .await?;
             Ok(payload_length)
@@ -633,15 +631,15 @@ where
 
     async fn get_rx_packet_status(&mut self) -> Result<PacketStatus, RadioError> {
         let op_code = [OpCode::GetPacketStatus.value()];
-        let mut pkt_status = [0x00u8; 3];
-        let read_status = self.intf.read_with_status(&[&op_code], &mut pkt_status).await?;
-        if OpStatusErrorMask::is_error(read_status) {
-            return Err(RadioError::OpError(read_status));
+        let mut pkt_status = [0x00u8; 4];
+        self.intf.read(&[&op_code], &mut pkt_status).await?;
+        if OpStatusErrorMask::is_error(pkt_status[0]) {
+            return Err(RadioError::OpError(pkt_status[0]));
         }
         // check this ???
-        let rssi = ((-(pkt_status[0] as i32)) >> 1) as i16;
-        let snr = (((pkt_status[1] as i8) + 2) >> 2) as i16;
-        let _signal_rssi = ((-(pkt_status[2] as i32)) >> 1) as i16; // unused currently
+        let rssi = ((-(pkt_status[1] as i32)) >> 1) as i16;
+        let snr = (((pkt_status[2] as i8) + 2) >> 2) as i16;
+        let _signal_rssi = ((-(pkt_status[3] as i32)) >> 1) as i16; // unused currently
 
         Ok(PacketStatus { rssi, snr })
     }
@@ -753,17 +751,17 @@ where
             }
 
             let op_code = [OpCode::GetIrqStatus.value()];
-            let mut irq_status = [0x00u8, 0x00u8];
-            let read_status = self.intf.read_with_status(&[&op_code], &mut irq_status).await?;
-            let irq_flags = ((irq_status[0] as u16) << 8) | (irq_status[1] as u16);
-            let op_code_and_irq_status = [OpCode::ClrIrqStatus.value(), irq_status[0], irq_status[1]];
+            let mut irq_status = [0u8; 3];
+            self.intf.read(&[&op_code], &mut irq_status).await?;
+            let irq_flags = u16::from_be_bytes([irq_status[1], irq_status[2]]);
+            let op_code_and_irq_status = [OpCode::ClrIrqStatus.value(), irq_status[1], irq_status[2]];
             self.intf.write(&[&op_code_and_irq_status], false).await?;
 
             // Report a read status error for debugging only.  Normal timeouts are sometimes reported as a read status error.
-            if OpStatusErrorMask::is_error(read_status) {
+            if OpStatusErrorMask::is_error(irq_status[0]) {
                 debug!(
                     "process_irq read status error = 0x{:x} in radio mode {}",
-                    read_status, radio_mode
+                    irq_status[0], radio_mode
                 );
             }
 
