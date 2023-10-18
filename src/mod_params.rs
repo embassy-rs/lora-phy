@@ -63,6 +63,8 @@ pub struct PacketStatus {
 pub enum BoardType {
     CustomBoard,
     GenericSx1261, // placeholder for Sx1261-specific features
+    GenericSx1272,
+    GenericSx1276,
     HeltecWifiLoraV31262,
     RpPicoWaveshareSx1262,
     Rak4631Sx1262,
@@ -78,6 +80,7 @@ pub enum ChipType {
     CustomChip,
     Sx1261,
     Sx1262,
+    Sx1272,
     Sx1276,
     Sx1277,
     Sx1278,
@@ -89,6 +92,8 @@ impl From<BoardType> for ChipType {
         match board_type {
             BoardType::CustomBoard => ChipType::CustomChip,
             BoardType::GenericSx1261 => ChipType::Sx1261,
+            BoardType::GenericSx1272 => ChipType::Sx1272,
+            BoardType::GenericSx1276 => ChipType::Sx1276,
             BoardType::HeltecWifiLoraV31262 => ChipType::Sx1262,
             BoardType::RpPicoWaveshareSx1262 => ChipType::Sx1262,
             BoardType::Rak4631Sx1262 => ChipType::Sx1262,

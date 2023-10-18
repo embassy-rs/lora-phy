@@ -291,7 +291,7 @@ where
     async fn set_oscillator(&mut self) -> Result<(), RadioError> {
         // voltage used to control the TCXO on/off from DIO3
         let voltage = match self.board_type {
-            BoardType::CustomBoard | BoardType::Stm32l0Sx1276 => {
+            BoardType::CustomBoard | BoardType::GenericSx1272 | BoardType::GenericSx1276 | BoardType::Stm32l0Sx1276 => {
                 return Err(RadioError::BoardTypeUnsupportedForRadioKind);
             }
             BoardType::Rak3172Sx1262 => {
