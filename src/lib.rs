@@ -1,6 +1,6 @@
 #![no_std]
-#![feature(async_fn_in_trait)]
 #![allow(incomplete_features)]
+#![allow(async_fn_in_trait)]
 #![warn(missing_docs)]
 #![doc = include_str!("../README.md")]
 
@@ -15,7 +15,7 @@ pub mod sx1261_2;
 /// Specific implementation to support Semtech Sx127x chips
 pub mod sx1276_7_8_9;
 
-pub use embedded_hal_async::delay::DelayUs;
+pub use embedded_hal_async::delay::DelayNs;
 use interface::*;
 use mod_params::*;
 use mod_traits::*;
@@ -27,7 +27,7 @@ const MAX_LORA_SYMB_NUM_TIMEOUT: u32 = 248;
 pub struct LoRa<RK, DLY>
 where
     RK: RadioKind,
-    DLY: DelayUs,
+    DLY: DelayNs,
 {
     radio_kind: RK,
     delay: DLY,
@@ -42,7 +42,7 @@ where
 impl<RK, DLY> LoRa<RK, DLY>
 where
     RK: RadioKind,
-    DLY: DelayUs,
+    DLY: DelayNs,
 {
     /// Build and return a new instance of the LoRa physical layer API to control an initialized LoRa radio
     pub async fn new(radio_kind: RK, enable_public_network: bool, delay: DLY) -> Result<Self, RadioError> {
@@ -277,7 +277,10 @@ where
         rx_pkt_params: &PacketParams,
         receiving_buffer: &mut [u8],
     ) -> Result<(u8, PacketStatus), RadioError> {
-        let IrqState::RxDone(len, status) = self.rx_until_state(rx_pkt_params, receiving_buffer, TargetIrqState::Done).await? else {
+        let IrqState::RxDone(len, status) = self
+            .rx_until_state(rx_pkt_params, receiving_buffer, TargetIrqState::Done)
+            .await?
+        else {
             unreachable!();
         };
         Ok((len, status))
@@ -424,7 +427,7 @@ where
 impl<RK, DLY> AsyncRng for LoRa<RK, DLY>
 where
     RK: RngRadio,
-    DLY: DelayUs,
+    DLY: DelayNs,
 {
     async fn get_random_number(&mut self) -> Result<u32, RadioError> {
         self.rx_continuous = false;
