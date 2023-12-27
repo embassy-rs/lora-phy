@@ -1,3 +1,5 @@
+# This repo has been moved. Find the new repo [here](https://github.com/lora-rs/lora-rs).
+
 # LoRa physical layer (the rustaceous radio)
 
 [![CI](https://github.com/embassy-rs/lora-phy/actions/workflows/ci.yaml/badge.svg)](https://github.com/embassy-rs/lora-phy/actions/workflows/ci.yaml)
